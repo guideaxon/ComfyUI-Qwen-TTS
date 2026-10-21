@@ -1417,6 +1417,10 @@ class SaveVoiceNode:
     def save(self, voice_clone_prompt, filename, audio=None, ref_text=""):
         import soundfile as sf
         import json
+        # Strip any directory components so the output cannot escape the voices dir
+        filename = os.path.basename(filename.replace("\\", "/")).strip()
+        if filename in ("", ".", "..", ".qvp"):
+            raise ValueError("Invalid voice filename.")
         if not filename.endswith(".qvp"):
             filename_qvp = filename + ".qvp"
             filename_wav = filename + ".wav"
@@ -1504,6 +1508,8 @@ class LoadSpeakerNode:
             raise RuntimeError("No speaker files found to load.")
             
         voices_dir = os.path.join(folder_paths.models_dir, "qwen-tts", "voices")
+        if os.path.basename(filename.replace("\\", "/")) != filename:
+            raise ValueError("Invalid speaker filename.")
         wav_path = os.path.join(voices_dir, filename)
         
         # 1. Load the AUDIO for output/preview
@@ -1537,12 +1543,11 @@ class LoadSpeakerNode:
         # 2.2 Check for pre-computed features (.qvp)
         if os.path.exists(qvp_path):
             try:
-                # Set weights_only=False to allow custom VoiceClonePromptItem class (PyTorch 2.6+ compatibility)
-                if hasattr(torch, 'serialization') and hasattr(torch.serialization, 'add_safe_globals'):
-                    # Optional: Could use add_safe_globals, but weights_only=False is more direct for local files
-                    data = torch.load(qvp_path, map_location="cpu", weights_only=False)
-                else:
-                    data = torch.load(qvp_path, map_location="cpu")
+                # Never unpickle arbitrary objects: .qvp files may come from untrusted sources.
+                # Only allowlist the one dataclass the format needs.
+                safe = [VoiceClonePromptItem] if VoiceClonePromptItem is not None else []
+                with torch.serialization.safe_globals(safe):
+                    data = torch.load(qvp_path, map_location="cpu", weights_only=True)
                 
                 # Support legacy packaged format and raw format
                 if isinstance(data, dict) and "prompt" in data:
